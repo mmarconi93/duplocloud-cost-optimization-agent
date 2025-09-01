@@ -1,0 +1,141 @@
+{
+  "messages": [
+    // 1. User asks for help
+    {
+      "role": "user",
+      "content": "find all non running pods in my namespace",
+      "platform_context": {
+        "k8s_namespace": "duploservices-andy",
+        "tenant_name": "andy",
+        "aws_credentials": { /* ... */ },
+        "kubeconfig": "base64..."
+      },
+      "data": {}
+    },
+    
+    // 2. Agent analyzes and proposes commands
+    {
+      "role": "assistant", 
+      "content": "I'll help you find non-running pods. Let me check the pod status in your namespace.",
+      "data": {
+        "cmds": [
+          {
+            "command": "kubectl get pods -n duploservices-andy --field-selector=status.phase!=Running",
+            "execute": false  // Asking for approval
+          }
+        ]
+      }
+    },
+    
+    // 3. User approves/rejects commands (empty content for pure approval)
+    {
+      "role": "user",
+      "content": "",  // Empty because this is just an approval action
+      "platform_context": { /* same as before */ },
+      "data": {
+        "cmds": [
+          {
+            "command": "kubectl get pods -n duploservices-andy --field-selector=status.phase!=Running",
+            "execute": true  // User approved
+          }
+        ]
+      }
+    },
+    
+    // 4. Agent executes and reports results
+    {
+      "role": "assistant",
+      "content": "Good news! All pods in your namespace are running. Let me show you the details.",
+      "data": {
+        "executed_cmds": [
+          {
+            "command": "kubectl get pods -n duploservices-andy --field-selector=status.phase!=Running",
+            "output": "<command output>"
+          }
+        ],
+        "cmds": [
+          {
+            "command": "kubectl get pods -n duploservices-andy",
+            "execute": false  // New suggestion
+          }
+        ]
+      }
+    },
+    
+    // 5a. User runs their own commands (PREFERRED: using executed_cmds)
+    {
+      "role": "user", 
+      "content": "I checked the logs myself and found database connection errors",
+      "platform_context": { /* same */ },
+      "data": {
+        "executed_cmds": [  // Commands user ran independently
+          {
+            "command": "kubectl logs app-pod-xyz",
+            "output": "ERROR: Database connection timeout at 10.0.0.5:5432"
+          }
+        ]
+      }
+    },
+    
+    // 5b. ALTERNATIVE: User runs commands with ambient_context (if we can't merge into executed_cmds)
+    {
+      "role": "user",
+      "content": "I checked the logs myself and found database connection errors",
+      "platform_context": { /* same */ },
+      "data": {},  // Normal data stays here
+      "ambient_context": {  // Top-level field, peer to data
+        "user_terminal_cmds": [
+          {
+            "command": "kubectl logs app-pod-xyz",
+            "output": "ERROR: Database connection timeout at 10.0.0.5:5432",
+            "timestamp": "2025-05-20T18:01:50.123456Z"
+          }
+        ]
+      }
+    },
+    
+    // 6. Mixed scenario: User approves some, rejects others, plus own commands
+    {
+      "role": "user",
+      "content": "Let's check the database pod but not delete anything yet",
+      "platform_context": { /* same */ },
+      "data": {
+        "cmds": [
+          {
+            "command": "kubectl describe pod postgres-xyz",
+            "execute": true
+          },
+          {
+            "command": "kubectl delete pod postgres-xyz", 
+            "execute": false,
+            "rejection_reason": "Too risky without backup verification"
+          }
+        ],
+        "executed_cmds": [  // User's own diagnostic commands
+          {
+            "command": "kubectl get pvc",
+            "output": "NAME         STATUS   VOLUME   CAPACITY\npostgres-pv  Bound    pvc-123  10Gi"
+          }
+        ]
+      }
+    },
+    
+    // 7. Agent can also share URLs (browser canvas)
+    {
+      "role": "assistant",
+      "content": "Here are the relevant monitoring dashboards for your database issues:",
+      "data": {
+        "url_configs": [
+          {
+            "url": "https://grafana.company.com/d/postgres-metrics",
+            "description": "PostgreSQL performance metrics"
+          },
+          {
+            "url": "https://grafana.company.com/d/k8s-pods", 
+            "description": "Kubernetes pod health dashboard"
+          }
+        ]
+      }
+    }
+  ]
+}

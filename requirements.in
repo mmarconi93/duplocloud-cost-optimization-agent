@@ -1,0 +1,9 @@
+fastapi
+pydantic
+uvicorn
+boto3
+dotenv
+tk
+requests
+langchain_community
+duplocloud-client
