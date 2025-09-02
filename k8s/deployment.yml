@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cost-optimization-agent
+  namespace: duploservices-aic-42289f0d
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cost-optimization-agent
+  template:
+    metadata:
+      labels:
+        app: cost-optimization-agent
+    spec:
+      serviceAccountName: duploservices-aic-42289f0d-edit-user  # IRSA for AWS creds
+      containers:
+        - name: agent
+          image: ghcr.io/mmarconi93/duplocloud-cost-optimization-agent:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+          env:
+            - name: AWS_REGION
+              value: us-east-1
+            # Tell the agent to use MCP for cost summaries
+            - name: AGENT_USE_MCP
+              value: "1"
+            - name: MCP_BASE
+              value: "http://127.0.0.1:8080"
+          readinessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits:   { cpu: 500m, memory: 512Mi }
+          securityContext:
+            runAsNonRoot: true
+
+        - name: mcp-proxy
+          image: ghcr.io/mmarconi93/duplocloud-cost-optimization-agent:latest
+          imagePullPolicy: Always
+          command: ["uvicorn", "mcp_proxy.main:app", "--host", "0.0.0.0", "--port", "8080"]
+          ports:
+            - containerPort: 8080
+          env:
+            - name: AWS_REGION
+              value: us-east-1
+            # Spawn ALL THREE AWS MCP servers over STDIO (built into the image under /opt/aws-mcp/dist)
+            - name: MCP_CE_CMD
+              value: "node /opt/aws-mcp/dist/src/cost-explorer-mcp-server/index.js --stdio --region us-east-1"
+            - name: MCP_BCM_CMD
+              value: "node /opt/aws-mcp/dist/src/billing-cost-management-mcp-server/index.js --stdio --region us-east-1"
+            - name: MCP_PRICING_CMD
+              value: "node /opt/aws-mcp/dist/src/aws-pricing-mcp-server/index.js --stdio --region us-east-1"
+          readinessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits:   { cpu: 500m, memory: 512Mi }
+          securityContext:
+            runAsNonRoot: true

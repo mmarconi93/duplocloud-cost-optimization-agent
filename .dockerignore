@@ -9,6 +9,7 @@ env_update_aws_creds.sh
 
 # Python cache files
 __pycache__/
+*.pyc
 *.py[cod]
 *$py.class
 *.so

@@ -1,46 +1,25 @@
-
 """
 Run with:   python main.py
-Or `uvicorn main:app --port 8000` if you prefer the CLI.
+Or:         uvicorn main:app --port 8000 --reload
 """
 
-from agent_server import create_chat_app
-from services.llm import BedrockAnthropicLLM
-from agents.echo_agent import EchoAgent
-from agents.llm_passthrough_agent import LLMPassthroughAgent
-from agents.cmd_agent import CommandAgent
-from agents.boilerplate_agent import BoilerplateAgent
-from agents.tool_calling_agent_boilerplate import ToolCallingBoilerplateAgent
-from agents.k8s_agent import K8sAgent
-import dotenv
-import uvicorn
 import os
+import dotenv
+from agent_server import create_chat_app
+from agents.aws_cost_optimization_agent import CostOptimizationAgent
+from routers.aws_info import router as aws_info_router
+from routers.cost_chart import router as cost_chart_router
 
-# Load environment variables from .env file and override existing ones
+# Load .env (useful for local, but optional for cluster)
 dotenv.load_dotenv(override=True)
 
-region_name = os.getenv("AWS_REGION", "us-east-1")
-llm = BedrockAnthropicLLM(region_name=region_name)
-
-
-# agent = K8sAgent(llm)
-agent = ToolCallingBoilerplateAgent(llm)
-# Choose which agent to use
-# agent = EchoAgent()
-agent = LLMPassthroughAgent(BedrockAnthropicLLM())
-# agent = CommandAgent(BedrockAnthropicLLM())
-# agent = BoilerplateAgent()  # Default to the boilerplate agent
-
+# Initialize the agent
+agent = CostOptimizationAgent()
 app = create_chat_app(agent)
-port = os.getenv("PORT", 8000)
+app.include_router(aws_info_router)
+app.include_router(cost_chart_router)
 
 if __name__ == "__main__":
-        
-    # For reload to work, we need to use an import string instead of the app object
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=int(port),
-        reload=True,     # set True for auto-reload in dev
-        log_level="info",
-    )
+    import uvicorn
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True, log_level="info")

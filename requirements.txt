@@ -179,4 +179,7 @@ uvicorn==0.34.3
 yarl==1.20.0
     # via aiohttp
 zstandard==0.23.0
-    # via langsmith
+    # via
+matplotlib==3.9
+
+pytest==8.0
