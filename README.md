@@ -5,6 +5,24 @@ This agent provides **AWS cost optimization insights** by orchestrating AWS MCP 
 
 ---
 
+## High-Level Flow
+
+```mermaid
+flowchart TD
+  User --> HelpDesk
+  HelpDesk --> Agent["Cost Optimization Agent"]
+  Agent --> Proxy["MCP Proxy (FastMCP)"]
+  Agent --> Tools["Custom Tools"]
+
+  Proxy --> Pricing["AWS Pricing MCP Server"]
+  Proxy --> Billing["AWS Billing & Cost Mgmt MCP Server"]
+  Proxy --> Explorer["AWS Cost Explorer MCP Server"]
+
+  Tools --> Charts["Cost Charts"]
+  Tools --> Anomalies["Anomaly Detection"]
+  Tools --> Idle["Idle Assets Detection"]
+```
+
 ## ✨ Features
 
 - **Cost Optimization Agent**
