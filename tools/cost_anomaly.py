@@ -1,19 +1,45 @@
 import os
 import datetime
-import boto3
+from typing import Dict, Any, List, Tuple
 
-def detect_anomalies(lookback_days=90, z=3.0, window=7):
-    ce = boto3.client("ce", region_name=os.getenv("AWS_REGION", "us-east-1"))
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
+
+
+def detect_anomalies(lookback_days: int = 90, z: float = 3.0, window: int = 7) -> Dict[str, Any]:
+    """
+    Naive z-score anomaly detection over daily UnblendedCost totals.
+    Uses Cost Explorer; end date is exclusive (AWS behavior).
+    """
+    region = os.getenv("AWS_REGION", "us-east-1")
+    ce = boto3.client("ce", region_name=region)
+
     end = datetime.date.today() + datetime.timedelta(days=1)  # CE end is exclusive
     start = end - datetime.timedelta(days=lookback_days)
 
-    resp = ce.get_cost_and_usage(
-        TimePeriod={"Start": str(start), "End": str(end)},
-        Granularity="DAILY",
-        Metrics=["UnblendedCost"],
-    )
-    series = []
-    for day in resp.get("ResultsByTime", []):
+    try:
+        resp = ce.get_cost_and_usage(
+            TimePeriod={"Start": str(start), "End": str(end)},
+            Granularity="DAILY",
+            Metrics=["UnblendedCost"],
+        )
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "")
+        # If CE isn’t enabled/ingested yet, return a clean message
+        if code == "DataUnavailableException":
+            return {
+                "lookbackDays": lookback_days,
+                "z": z,
+                "window": window,
+                "anomalies": [],
+                "note": "Cost Explorer data is not available yet (DataUnavailableException).",
+            }
+        return {"lookbackDays": lookback_days, "z": z, "window": window, "anomalies": [], "note": str(e)}
+    except BotoCoreError as e:
+        return {"lookbackDays": lookback_days, "z": z, "window": window, "anomalies": [], "note": str(e)}
+
+    series: List[Tuple[str, float]] = []
+    for day in resp.get("ResultsByTime", []) or []:
         amt = float(day["Total"]["UnblendedCost"]["Amount"])
         series.append((day["TimePeriod"]["Start"], amt))
 
@@ -22,8 +48,9 @@ def detect_anomalies(lookback_days=90, z=3.0, window=7):
     for i, (ts, v) in enumerate(series):
         if i < window:
             continue
-        mean = sum(vals[i-window:i]) / window
-        var = sum((x - mean) ** 2 for x in vals[i-window:i]) / window
+        hist = vals[i - window : i]
+        mean = sum(hist) / window
+        var = sum((x - mean) ** 2 for x in hist) / window
         std = var ** 0.5
         score = (v - mean) / std if std > 0 else 0.0
         if score >= z:

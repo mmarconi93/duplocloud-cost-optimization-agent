@@ -183,3 +183,9 @@ zstandard==0.23.0
 matplotlib==3.9
 
 pytest==8.0
+
+fastmcp==0.3.2
+
+modelcontextprotocol[client]==0.1.0
+
+mcp[client]==1.13.1

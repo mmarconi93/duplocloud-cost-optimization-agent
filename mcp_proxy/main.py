@@ -1,26 +1,20 @@
 from fastapi import FastAPI, Body
-from .servers import launch
+from .servers import SERVERS
 from .sse_bridge import stdio_to_sse
 
-app = FastAPI(title="MCP Proxy (STDIO <-> SSE)")
-
-# Keep one long-lived process per server (simple cache)
-procs = {"pricing": None, "bcm": None, "ce": None}
-
-def get_proc(name: str):
-    if procs[name] is None or procs[name].poll() is not None:
-        procs[name] = launch(name)
-    return procs[name]
+app = FastAPI(title="MCP Proxy (MCP client ↔ SSE)")
 
 @app.get("/health")
 def health():
-    return {"status":"ok"}
+    return {"status": "ok"}
 
 @app.post("/mcp/{server}/invoke")
 async def invoke(server: str, payload: dict = Body(...)):
-    if server not in procs:
+    """
+    Bridges HTTP -> (spawn MCP server over stdio) -> SSE back to the client.
+    Use with an SSE-capable client (or pipe through `ssejq` like you did).
+    """
+    if server not in SERVERS:
         return {"error": f"unknown server '{server}'"}
-    proc = get_proc(server)
-    # ❌ return await stdio_to_sse(proc, payload)
-    # ✅
-    return stdio_to_sse(proc, payload)
+    cmd = SERVERS[server]["cmd"]
+    return await stdio_to_sse(cmd, payload)

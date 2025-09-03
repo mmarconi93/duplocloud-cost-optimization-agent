@@ -1,12 +1,17 @@
 from typing import Dict, Any, List, Optional, Callable
 import os, re, json, logging
+from datetime import datetime, timedelta, timezone
 
 from agent_server import AgentProtocol
 from schemas.messages import AgentMessage
+
+# Local (fallback) tools when not using MCP
 from tools.cost_explorer import get_cost_summary
 from tools.compute_optimizer import get_ec2_rightsizing
 from tools.idle_assets import find_idle_assets
 from tools.cost_anomaly import detect_anomalies
+
+# MCP proxy invoker
 from services.mcp_client import invoke as mcp_invoke
 
 logger = logging.getLogger(__name__)
@@ -16,6 +21,9 @@ HELP = (
     "'cost summary last 7 days tag:Environment', "
     "'rightsizing recommendations', or 'idle assets'."
 )
+
+def _ymd(dt: datetime) -> str:
+    return dt.strftime("%Y-%m-%d")
 
 def _safe(
     fn: Callable[[], Any],
@@ -50,7 +58,6 @@ def _post_cost_summary(result: Dict[str, Any], lookback_days: int) -> AgentMessa
     total = result.get("total")
     if isinstance(total, (int, float)) and total > 0:
         recs.append("Create a budget + alert at 80/90/100% of expected monthly spend.")
-    # Link to a PNG chart endpoint if added
     chart_hint = f"\nView trend: /charts/cost-trend.png?lookback_days={lookback_days}"
 
     body = narrative
@@ -111,6 +118,36 @@ def _post_anomalies(result: Dict[str, Any]) -> AgentMessage:
 
 # --------------------------------------------------------------------
 
+def _extract_ce_error(resp: Dict[str, Any]) -> Optional[str]:
+    """Try to pull a CE error message from several possible shapes returned by the MCP proxy."""
+    # direct form
+    err = resp.get("error") or resp.get("message")
+    if err:
+        return err
+    # structuredContent.result.error
+    sc = resp.get("structuredContent") or {}
+    if isinstance(sc, dict):
+        r = sc.get("result") or {}
+        if isinstance(r, dict):
+            e = r.get("error")
+            if e:
+                return e
+    # result.error
+    r = resp.get("result") or {}
+    if isinstance(r, dict):
+        e = r.get("error")
+        if e:
+            return e
+    # content array with one text blob that contains an error line
+    content = resp.get("content") or []
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                t = item.get("text") or ""
+                if "DataUnavailableException" in t:
+                    return t
+    return None
+
 class CostOptimizationAgent(AgentProtocol):
     def invoke(self, payload: Dict[str, List[Dict[str, Any]]]) -> AgentMessage:
         msgs = payload.get("messages", [])
@@ -139,15 +176,39 @@ class CostOptimizationAgent(AgentProtocol):
 
         if "cost summary" in text_lc:
             if use_mcp:
-                params: Dict[str, Any] = {"granularity": "DAILY", "days": lookback_days}
+                # Build CE-friendly date_range (end_date inclusive per this server’s contract)
+                today = datetime.now(timezone.utc).date()
+                start = today - timedelta(days=lookback_days)
+                params: Dict[str, Any] = {
+                    "date_range": {"start_date": _ymd(start), "end_date": _ymd(today)},
+                    "granularity": "DAILY",
+                    "metric": "UnblendedCost",
+                }
+                # group_by per schema (string or dict)
                 if group_by == "TAG" and tag_key:
-                    params["groupBy"] = {"type": "TAG", "key": tag_key}
-                elif group_by == "SERVICE":
-                    params["groupBy"] = {"type": "DIMENSION", "key": "SERVICE"}
+                    params["group_by"] = {"Type": "TAG", "Key": tag_key}
+                else:
+                    params["group_by"] = "SERVICE"
 
                 def _call():
-                    # 'ce' maps to the Cost Explorer MCP server in the proxy
-                    return mcp_invoke("ce", {"tool": "GetCostAndUsage", "params": params})
+                    # Correct tool name from /mcp/ce/list_tools
+                    resp = mcp_invoke("ce", {"tool": "get_cost_and_usage", "params": params})
+
+                    # Gracefully handle brand-new accounts without CE data
+                    if isinstance(resp, dict):
+                        err = _extract_ce_error(resp)
+                        if err and "DataUnavailableException" in err:
+                            return {
+                                "narrative": (
+                                    "Cost Explorer data isn’t available in this account yet. "
+                                    "After enabling Cost Explorer, ingestion can take up to ~24h. "
+                                    "Please try again later."
+                                ),
+                                "total": 0,
+                                "top": []
+                            }
+                    return resp
+
                 return _safe(
                     _call,
                     label="cost summary (MCP CE)",

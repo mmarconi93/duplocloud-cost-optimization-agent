@@ -1,55 +1,79 @@
 import json
-import time
-from typing import AsyncGenerator
+import shlex
+from typing import Any, Dict, List, Optional, Sequence, Union
+
 from fastapi.responses import StreamingResponse
 
-READ_TIMEOUT_SEC = 20  # don't hang forever during local tests
+# MCP client (v1.11+)
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 
-def stdio_to_sse(proc, payload: dict) -> StreamingResponse:
+
+def _normalize_cmd(cmd: Union[str, Sequence[str]]):
     """
-    Writes one JSON line to the STDIO MCP server, flushes, then streams back
-    exactly one line as text/event-stream ("data: <json>\n\n").
+    Accept either a single command string or a pre-split list/tuple.
+    Return (command: str, args: List[str]) suitable for StdioServerParameters.
     """
+    if isinstance(cmd, (list, tuple)):
+        if not cmd:
+            raise ValueError("Empty command list provided to stdio_to_sse.")
+        command, *args = cmd
+    else:
+        parts = shlex.split(cmd)
+        if not parts:
+            raise ValueError("Empty command string provided to stdio_to_sse.")
+        command, *args = parts
+    return command, args
 
-    # ---- Write request line (CRITICAL: newline + flush) ----
-    line = json.dumps(payload)
-    if proc.stdin is None:
-        def _err():
-            yield 'data: {"error":"stdin closed"}\n\n'
-        return StreamingResponse(_err(), media_type="text/event-stream")
 
-    try:
-        # proc was opened in text=True below; write str
-        proc.stdin.write(line + "\n")
-        proc.stdin.flush()
-    except Exception as e:
-        def _err():
-            yield f'data: {json.dumps({"error": f"write failed: {e}"})}\n\n'
-        return StreamingResponse(_err(), media_type="text/event-stream")
+async def stdio_to_sse(cmd: Union[str, List[str]], payload: Dict[str, Any]):
+    """
+    Spawn an MCP server (stdio transport), perform handshake, optionally list tools,
+    or call a specific tool with `params`, and stream a single SSE message back.
+    """
+    async def _gen():
+        command, args = _normalize_cmd(cmd)
+        server = StdioServerParameters(command=command, args=args)
 
-    # ---- Read a single response line and stream as SSE ----
-    def _stream():
-        start = time.time()
-        while True:
-            if proc.stdout is None:
-                yield 'data: {"error":"stdout closed"}\n\n'
-                return
+        async with stdio_client(server) as (read, write):
+            async with ClientSession(read, write) as session:
+                # Handshake
+                await session.initialize()
 
-            out = proc.stdout.readline()
-            if out:
-                out = out.strip()
-                # If not valid JSON, wrap it so the client always gets JSON
+                # ---- Discovery: list tools ----
+                if payload.get("list_tools"):
+                    tools = await session.list_tools()
+                    out = tools.model_dump(mode="json") if hasattr(tools, "model_dump") else tools
+                    yield "data: " + json.dumps({"ok": True, "tools": out}) + "\n\n"
+                    return
+
+                # ---- Health probe ----
+                if payload.get("ping"):
+                    yield "data: " + json.dumps({"ok": True}) + "\n\n"
+                    return
+
+                # ---- Tool call ----
+                tool_name: Optional[str] = payload.get("tool")
+                params: Dict[str, Any] = payload.get("params", {}) or {}
+
+                if not tool_name:
+                    yield "data: " + json.dumps({"error": "no tool specified"}) + "\n\n"
+                    return
+
                 try:
-                    json.loads(out)
-                    data = out
-                except Exception:
-                    data = json.dumps({"raw": out})
-                yield f"data: {data}\n\n"
-                return
+                    result = await session.call_tool(tool_name, arguments=params)
+                    out = {
+                        "ok": True,
+                        "tool": tool_name,
+                        "result": (
+                            result.model_dump(mode="json")
+                            if hasattr(result, "model_dump")
+                            else result
+                        ),
+                    }
+                    yield "data: " + json.dumps(out) + "\n\n"
+                except Exception as e:
+                    err = {"ok": False, "tool": tool_name, "error": str(e)}
+                    yield "data: " + json.dumps(err) + "\n\n"
 
-            if time.time() - start > READ_TIMEOUT_SEC:
-                yield 'data: {"error":"no output from MCP subprocess"}\n\n'
-                return
-            time.sleep(0.1)
-
-    return StreamingResponse(_stream(), media_type="text/event-stream")
+    return StreamingResponse(_gen(), media_type="text/event-stream")
