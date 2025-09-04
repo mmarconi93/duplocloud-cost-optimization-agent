@@ -26,14 +26,19 @@ def _normalize_cmd(cmd: Union[str, Sequence[str]]):
     return command, args
 
 
-async def stdio_to_sse(cmd: Union[str, List[str]], payload: Dict[str, Any]):
+async def stdio_to_sse(
+    cmd: Union[str, List[str]],
+    payload: Dict[str, Any],
+    *,
+    env: Optional[Dict[str, str]] = None,
+):
     """
     Spawn an MCP server (stdio transport), perform handshake, optionally list tools,
     or call a specific tool with `params`, and stream a single SSE message back.
     """
     async def _gen():
         command, args = _normalize_cmd(cmd)
-        server = StdioServerParameters(command=command, args=args)
+        server = StdioServerParameters(command=command, args=args, env=env or {})
 
         async with stdio_client(server) as (read, write):
             async with ClientSession(read, write) as session:
@@ -49,6 +54,7 @@ async def stdio_to_sse(cmd: Union[str, List[str]], payload: Dict[str, Any]):
 
                 # ---- Health probe ----
                 if payload.get("ping"):
+                    # If we got here, the server started & handshake succeeded.
                     yield "data: " + json.dumps({"ok": True}) + "\n\n"
                     return
 

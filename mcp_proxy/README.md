@@ -36,3 +36,15 @@ It should be associated with an IAM role (IRSA) that grants access to:
 - Pricing API
 - Cost Explorer API
 - Billing & Cost Management
+
+## Use in AI Studio -> HelpDesk
+To ping and test MCP server connectivitiy between the agent, do the following from inside the `HelpDesk`:
+```bash
+mcp pricing ping
+```
+```bash
+mcp bcm ping
+```
+```bash
+mcp ce ping
+```

@@ -16,6 +16,6 @@ This directory contains the **core AWS Cost Optimization Agent**.
 ## Example Queries
 
 - `"mcp ce ping"` → Sanity check
-- `"cost summary last 7 days"` → Cost Explorer summary
+- `"cost summary"` → Cost Explorer summary
 - `"idle assets"` → Run custom idle asset tool
 - `"rightsizing recommendations"` → Run Compute Optimizer tool

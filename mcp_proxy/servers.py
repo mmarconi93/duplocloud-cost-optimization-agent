@@ -1,52 +1,33 @@
 import os
-import shlex
-import subprocess
+import shutil
 
-# Default region (overridable via env)
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 
-# These defaults use the console script names exposed by each package.
-# You can override any of them with MCP_*_CMD env vars (as you've done for local venv paths).
-SERVERS = {
-    "pricing": {
-        "cmd": shlex.split(os.getenv(
-            "MCP_PRICING_CMD",
-            f"uvx awslabs.aws-pricing-mcp-server --stdio --region {AWS_REGION}"
-        )),
-        "env": {},
-    },
-    "bcm": {
-        "cmd": shlex.split(os.getenv(
-            "MCP_BCM_CMD",
-            # NOTE: console script is *billing-cost-management* (no leading 'aws-')
-            f"uvx awslabs.billing-cost-management-mcp-server --stdio --region {AWS_REGION}"
-        )),
-        "env": {},
-    },
-    "ce": {
-        "cmd": shlex.split(os.getenv(
-            "MCP_CE_CMD",
-            f"uvx awslabs.cost-explorer-mcp-server --stdio --region {AWS_REGION}"
-        )),
-        "env": {},
-    },
-}
+# Use uvx by default if it's on PATH (pip install uv). Disable with MCP_USE_UVX=0.
+USE_UVX = os.getenv("MCP_USE_UVX", "1") == "1" and shutil.which("uvx")
 
-def launch(name: str) -> subprocess.Popen:
-    """
-    Optional helper if you ever want to manage a long-lived child yourself.
-    Not used by the current SSE bridge (which spawns per-request).
-    """
-    spec = SERVERS[name]
-    return subprocess.Popen(
-        spec["cmd"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env={**os.environ, **spec.get("env", {})},
-        bufsize=1,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        close_fds=True,
-    )
+def _uvx(cmd: str) -> list[str]:
+    # Runs the published console script from the PyPI package
+    # e.g. "awslabs.cost-explorer-mcp-server"
+    return ["uvx", cmd, "--stdio", "--region", AWS_REGION]
+
+def _pythonm(module: str) -> list[str]:
+    # Fallback if we preinstalled modules into the image
+    return ["python", "-m", module, "--stdio", "--region", AWS_REGION]
+
+if USE_UVX:
+    PRICING_CMD = _uvx("awslabs.aws-pricing-mcp-server")
+    BCM_CMD     = _uvx("awslabs.billing-cost-management-mcp-server")
+    CE_CMD      = _uvx("awslabs.cost-explorer-mcp-server")
+else:
+    # If not using uvx, we must have these modules installed in the image.
+    # we can override each via env if the module names differ.
+    PRICING_CMD = _pythonm(os.getenv("MCP_PRICING_MODULE", "awslabs.pricing_mcp_server"))
+    BCM_CMD     = _pythonm(os.getenv("MCP_BCM_MODULE",     "awslabs.billing_cost_management_mcp_server"))
+    CE_CMD      = _pythonm(os.getenv("MCP_CE_MODULE",      "awslabs.cost_explorer_mcp_server"))
+
+SERVERS = {
+    "pricing": {"cmd": PRICING_CMD, "env": {}},
+    "bcm":     {"cmd": BCM_CMD,     "env": {}},
+    "ce":      {"cmd": CE_CMD,      "env": {}},
+}
